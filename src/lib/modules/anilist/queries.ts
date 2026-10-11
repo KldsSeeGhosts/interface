@@ -213,16 +213,15 @@ export const IDMedia = gql(`
   }
 `, [FullMedia])
 
-export const IDTitle = gql(`
-  query IDTitle($id: Int!) {
-    Media(id: $id, type: ANIME) {
-      id,
-      title {
-        userPreferred
+export const IDCard = gql(`
+  query IDCard($id: Int!) {
+      Media(id: $id, type: ANIME) {
+        id,
+        title { userPreferred },
+        coverImage { medium }
       }
     }
-  }
-`)
+  `)
 
 export const User = gql(`
   query User($id: Int!) {

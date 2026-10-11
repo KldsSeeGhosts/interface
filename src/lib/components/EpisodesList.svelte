@@ -1,4 +1,5 @@
 <script lang='ts'>
+  import Download from 'lucide-svelte/icons/download'
   import Play from 'lucide-svelte/icons/play'
   import Star from 'lucide-svelte/icons/star'
 
@@ -11,6 +12,7 @@
 
   import type { EpisodesResponse } from '$lib/modules/anizip/types'
 
+  import { searchStore } from '$lib'
   import Logo from '$lib/components/icons/Logo.svelte'
   import { episodes as _episodes, client, notes, type Media } from '$lib/modules/anilist'
   import { list, progress } from '$lib/modules/auth'
@@ -47,6 +49,10 @@
 
   function play (episode: number) {
     $playEp(media, episode)
+  }
+
+  function download (episode: number) {
+    searchStore.set({ media, episode, download: true })
   }
 
   export let following = client.following(media.id)
@@ -100,7 +106,7 @@
               </div>
             {/if}
             <div class='flex-grow py-3 px-4 flex flex-col'>
-              <div class='font-bold mb-2 line-clamp-1 shrink-0 text-[12.8px]'>
+              <div class='font-bold mb-2 line-clamp-1 shrink-0 text-[12.8px] pr-8'>
                 {episode}. {title?.en ?? 'Episode ' + episode}
               </div>
               {#if watched || completed}
@@ -121,22 +127,33 @@
                   {notes(summary ?? '')}
                 {/if}
               </div>
-              <div class='flex w-full justify-between mt-auto'>
+              <div class='flex w-full items-end justify-between mt-auto gap-2'>
                 {#if airingAt ?? airdate}
                   <div class='text-[9.6px] pt-2'>
                     {since(new Date(airingAt ?? airdate ?? 0))}
                   </div>
                 {/if}
-                <div class='-space-x-1 ml-auto inline-flex pt-1 pr-0.5'>
-                  {#each followerEntries.filter(e => e?.progress === episode) as followerEntry, i (followerEntry?.user?.id ?? i)}
-                    {#if followerEntry?.user}
-                      <Profile user={followerEntry.user} class='ring-2 ring-muted size-4 bg-background' />
-                    {/if}
-                  {/each}
+                <div class='ml-auto inline-flex items-center gap-1 pt-1'>
+                  <div class='-space-x-1 inline-flex pr-0.5'>
+                    {#each followerEntries.filter(e => e?.progress === episode) as followerEntry, i (followerEntry?.user?.id ?? i)}
+                      {#if followerEntry?.user}
+                        <Profile user={followerEntry.user} class='ring-2 ring-muted size-4 bg-background' />
+                      {/if}
+                    {/each}
+                  </div>
+                  {#if $settings.backgroundDownloads}
+                    <Button
+                      variant='ghost'
+                      size='icon-sm'
+                      class='shrink-0 text-muted-foreground select:text-accent-foreground'
+                      on:click={e => { e.stopPropagation(); download(episode) }}>
+                      <Download class='size-3.5' />
+                    </Button>
+                  {/if}
                 </div>
               </div>
               {#if filler}
-                <div class='rounded-tl bg-yellow-400 py-1 px-2 text-primary-foreground absolute bottom-0 right-0 text-[9.6px] font-bold'>Filler</div>
+                <div class='rounded-bl bg-yellow-400 py-1 px-2 text-primary-foreground absolute top-0 right-0 text-[9.6px] font-bold'>Filler</div>
               {/if}
             </div>
           </div>

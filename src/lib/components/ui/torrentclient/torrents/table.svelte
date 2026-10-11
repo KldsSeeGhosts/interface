@@ -152,7 +152,7 @@
       <Dialog.Header>
         <Dialog.Title>Remove from background downloads?</Dialog.Title>
         <Dialog.Description>
-          You are about to remove {$someRowsSelected ? Object.keys($selectedDataIds).length : '0'} torrent(s) from background downloads. Downloaded files are not deleted.
+          You are about to remove {$someRowsSelected ? Object.keys($selectedDataIds).length : '0'} torrent(s) from background downloads. The saved files stay on your drive.
         </Dialog.Description>
         <ul class='text-xs text-muted-foreground pl-5 space-y-2 py-4 list-disc overflow-clip max-h-[50vh] overflow-y-auto'>
           {#each getSelected() as entry (entry.hash)}
@@ -219,8 +219,10 @@
         {/each}
       {:else}
         <Table.Row>
-          <Table.Cell colspan={columns.length} class='h-40 text-center'>
-            No active torrents.
+          <Table.Cell colspan={columns.length} class='h-56 text-center'>
+            <div class='flex flex-col items-center gap-3 text-muted-foreground'>
+              <div class='text-sm'>Active torrents appear here.</div>
+            </div>
           </Table.Cell>
         </Table.Row>
       {/if}

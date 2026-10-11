@@ -20,6 +20,7 @@ export default {
   torrentPeX: false,
   torrentPort: 0,
   torrentStreamedDownload: true,
+  backgroundDownloads: false,
   dhtPort: 0,
   maxConns: 80,
   connectionBudget: 500,

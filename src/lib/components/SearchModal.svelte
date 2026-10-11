@@ -78,6 +78,8 @@
 
   $: open = !!$searchStore?.media
 
+  $: downloadMode = !!$searchStore?.download
+
   $: searchResGenerator = !!$searchStore?.media && extensions.torrentResults({ media: $searchStore.media, episode: $searchStore.episode, resolution: $settings.searchQuality })
 
   $: searchResult = searchResGenerator && processResults(searchResGenerator)
@@ -120,6 +122,11 @@
     if (!open || !$searchStore) return
     try {
       await server.backgroundDownload(hash, $searchStore.media.id, $searchStore.episode, link)
+      close()
+      toast.success('Added to background downloads', {
+        description: 'Progress is shown in the Downloads tab.',
+        duration: 8000
+      })
     } catch (error) {
       console.error(error)
       toast.error('Failed to start background download', {
@@ -129,13 +136,18 @@
     }
   }
 
+  function activate (result: TorrentResult) {
+    if ($searchStore?.download) download(result)
+    else play(result)
+  }
+
   async function playBest () {
     if (!searchResult) return
     const { results } = await searchResult
     if (!results.length) return
     const best = filterAndSortResults(results, inputText, $downloaded)[0]
 
-    if (best) play(best)
+    if (best) activate(best)
   }
 
   function filterAndSortResults (results: Array<TorrentResult & { parseObject: AnitomyResult, extension: Set<string> }>, searchText: string, downloaded: Set<string>) {
@@ -256,7 +268,7 @@
             size='default'
             class='w-full font-bold bg-custom select:bg-custom-600 text-contrast'
             bind:animating>
-            Auto Select Torrent
+            {downloadMode ? 'Auto Download Best' : 'Auto Select Torrent'}
           </ProgressButton>
         </div>
         <div class='h-full overflow-y-auto px-4 sm:px-6 pt-2' role='menu' tabindex='-1' on:keydown={stopAnimation} on:focusin={stopAnimation} on:pointerenter={stopAnimation} on:pointermove={stopAnimation} use:dragScroll style:--custom={$searchStore.media.coverImage?.color ?? '#fff'} style:--red={r} style:--green={g} style:--blue={b}>
@@ -264,7 +276,7 @@
             {#each filterAndSortResults(concatResults, inputText, $downloaded) as result (result.hash)}
               <div class='p-3 flex cursor-pointer mb-2 relative rounded-md overflow-hidden bg-muted group/card select:ring-1 select:ring-custom select:bg-accent select:scale-[1.02] select:shadow-lg scale-100 transition-all [content-visibility:auto] [contain-intrinsic-height:auto_106px]'
                 class:opacity-40={result.accuracy === 'low'}
-                use:click={() => play(result)}
+                use:click={() => activate(result)}
                 title={result.parseObject.file_name[0]}
                 animate:flip={{ duration: 400, easing: quartInOut }}>
                 {#if result.accuracy === 'high' || result.accuracy === 'medium'}
@@ -290,13 +302,6 @@
                           <img src={$savedConfigs[id].icon} alt={id} class='size-4' title='Provided by {id}' decoding='async' loading='lazy' />
                         {/if}
                       {/each}
-                      <button
-                        title='Download in background'
-                        on:click={(e) => { e.stopPropagation(); download(result) }}
-                        class='ml-1 px-1.5 py-0.5 text-[0.55rem] font-black uppercase leading-none shadow-[3px_3px_0_0_#000] active:translate-x-[3px] active:translate-y-[3px] active:shadow-none'
-                        style="background:#39ff14;color:#000;border:3px dashed #ff00ff;border-radius:0;font-family:'Comic Sans MS','Comic Sans',cursive;transform:rotate(-4deg);">
-                        Download in Background
-                      </button>
                     </div>
                   </div>
                   <div class='text-muted-foreground text-ellipsis text-nowrap overflow-hidden'>{simplifyFilename(result.parseObject)}</div>

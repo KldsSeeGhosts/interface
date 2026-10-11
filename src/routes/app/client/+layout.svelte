@@ -45,15 +45,15 @@
       href: '/#/app/client/library',
       overview: {
         title: 'Torrent Library',
-        desc: 'All of your downloaded torrents. If Persist Files is enabled then your previously downloaded torrents will show up here.'
+        desc: 'Torrents saved on your drive. If Persist Files is enabled then your previously downloaded torrents will show up here.'
       }
     },
     {
       title: 'Downloads',
       href: '/#/app/client/downloads',
       overview: {
-        title: 'Background Downloads',
-        desc: 'Torrents downloading in the background, their progress, and transfer statistics.'
+        title: 'Active Downloads',
+        desc: 'Torrents that download in the client now. Shows their progress and transfer statistics.'
       }
     },
     {

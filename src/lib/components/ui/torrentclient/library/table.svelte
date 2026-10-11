@@ -7,7 +7,7 @@
   import { Button } from '../../button'
   import Columnheader from '../columnheader.svelte'
 
-  import { MediaCell, NameCell, StatusCell, DateCell, CheckboxCell } from './cells'
+  import { MediaCell, StatusCell, DateCell, CheckboxCell } from './cells'
 
   import type { LibraryEntry } from 'native'
 
@@ -33,18 +33,14 @@
 
   const columns = table.createColumns([
     table.column({
-      accessor: 'mediaID',
+      accessor: row => row,
       header: 'Series',
       id: 'series',
-      plugins: { sort: { getSortValue: e => e ?? 0 }, filter: { exclude: true } },
-      cell: ({ value }) => value ? createRender(MediaCell, { value }) : '?'
-    }),
-    table.column({
-      accessor: 'episode',
-      header: 'Episode',
-      id: 'episode',
-      plugins: { sort: { getSortValue: e => e ?? 0 }, filter: { exclude: true } },
-      cell: ({ value }) => value?.toString() ?? '?'
+      plugins: {
+        sort: { disable: true },
+        filter: { getFilterValue: entry => entry.name ?? entry.hash }
+      },
+      cell: ({ value }) => createRender(MediaCell, { mediaID: value.mediaID, episode: value.episode, name: value.name })
     }),
     table.column({ accessor: 'files', header: 'Files', id: 'files', plugins: { filter: { exclude: true } } }),
     table.column({
@@ -56,7 +52,7 @@
     }),
     table.column({
       accessor: 'progress',
-      header: 'Status',
+      header: 'Download',
       id: 'completed',
       plugins: { sort: { getSortValue: e => e ?? 0 }, filter: { exclude: true } },
       cell: ({ value }) => value ? createRender(StatusCell, { value: value === 1 }) : '?'
@@ -67,13 +63,6 @@
       id: 'date',
       plugins: { sort: { getSortValue: e => e ?? 0 }, filter: { exclude: true } },
       cell: ({ value }) => value ? createRender(DateCell, { value }) : '?'
-    }),
-    table.column({
-      accessor: e => e?.name ?? e.hash,
-      header: 'Torrent Name',
-      id: 'name',
-      plugins: { sort: { getSortValue: e => e ?? '' } },
-      cell: ({ value }) => createRender(NameCell, { value })
     }),
     table.display({
       id: 'select',
@@ -220,7 +209,7 @@
                 props={cell.props()}
                 let:attrs
                 let:props>
-                <Table.Head {...attrs} class={cn('px-0 first:pl-2 h-12 last:pr-2')}>
+                <Table.Head {...attrs} class={cn('px-0 first:pl-4 h-12 last:pr-2')}>
                   <Columnheader {props}>
                     <Render of={cell.render()} />
                   </Columnheader>
@@ -235,13 +224,12 @@
       {#if $pageRows.length}
         {#each $pageRows as row (row.id)}
           <Subscribe rowAttrs={row.attrs()} let:rowAttrs>
-            <Table.Row {...rowAttrs} class={cn('h-14 [content-visibility:auto] [contain-intrinsic-height:auto_56px] contain-strict', (row instanceof DataBodyRow) && row.original.mediaID ? 'cursor-pointer' : 'cursor-not-allowed')} on:click={() => { if (row instanceof DataBodyRow) playEntry(row.original) }}>
+            <Table.Row {...rowAttrs} class={cn('h-16 [content-visibility:auto] [contain-intrinsic-height:auto_64px] contain-strict', (row instanceof DataBodyRow) && row.original.mediaID ? 'cursor-pointer' : 'cursor-not-allowed')} on:click={() => { if (row instanceof DataBodyRow) playEntry(row.original) }}>
               {#each row.cells as cell (cell.id)}
                 <Subscribe attrs={cell.attrs()} let:attrs>
                   <Table.Cell {...attrs} class={cn(
-                    'px-4 min-h-14 first:pl-6 last:pr-6 text-nowrap',
-                    (cell.id === 'episode') && 'text-muted-foreground',
-                    (cell.id === 'series' || cell.id === 'name') && 'min-w-72 text-wrap break-all',
+                    'px-4 min-h-16 last:pr-6 text-nowrap',
+                    cell.id === 'series' && 'max-w-96',
                     cell.id === 'select' && 'p-0 relative [&>div]:absolute'
                   )}>
                     <Render of={cell.render()} />
@@ -254,7 +242,7 @@
       {:else}
         <Table.Row>
           <Table.Cell colspan={columns.length} class='h-40 text-center'>
-            No torrents downloaded yet.
+            No torrents saved on your drive yet.
           </Table.Cell>
         </Table.Row>
       {/if}

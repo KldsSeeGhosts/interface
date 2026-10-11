@@ -5,7 +5,7 @@ import { derived, get, writable, type Writable } from 'svelte/store'
 
 import { nsfw } from '../settings/settings'
 
-import { AnimePage, Comments, DeleteEntry, DeleteThreadComment, Entry, Following, FollowingMany, type FullMedia, type FullMediaList, IDMedia, IDTitle, RecrusiveRelations, SaveThreadComment, Schedule, Search, Threads, ToggleFavourite, ToggleLike, UpdateUser, User, UserLists } from './queries'
+import { AnimePage, Comments, DeleteEntry, DeleteThreadComment, Entry, Following, FollowingMany, type FullMedia, type FullMediaList, IDCard, IDMedia, RecrusiveRelations, SaveThreadComment, Schedule, Search, Threads, ToggleFavourite, ToggleLike, UpdateUser, User, UserLists } from './queries'
 import urqlClient from './urql-client'
 import { seasonsForDate, removeDiacritics } from './util'
 
@@ -250,9 +250,9 @@ class AnilistClient {
     return await this.client.query(IDMedia, { id }, { requestPolicy })
   }
 
-  singleTitle (id: number, requestPolicy: RequestPolicy = 'cache-first') {
-    debug('singleTitle: fetching media title with ID', id)
-    return queryStore({ client: this.client, query: IDTitle, variables: { id }, context: { requestPolicy } })
+  singleCard (id: number, requestPolicy: RequestPolicy = 'cache-first') {
+    debug('singleCard: fetching media card with ID', id)
+    return queryStore({ client: this.client, query: IDCard, variables: { id }, context: { requestPolicy } })
   }
 
   following (animeID: number) {

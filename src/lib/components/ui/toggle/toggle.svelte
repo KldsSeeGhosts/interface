@@ -8,6 +8,7 @@
   type $$Props = TogglePrimitive.Props & {
     variant?: Variant
     size?: Size
+    class?: string
   }
   type $$Events = TogglePrimitive.Events
 
