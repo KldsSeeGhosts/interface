@@ -83,6 +83,7 @@ export default class MediaEngine extends TypedEventTarget<EngineEventMap> {
 
   _state: PlayerState = 'idle'
   _epoch = 0
+  _loadSeq = 0
   _destroyed = false
   _preferredAudioLanguage = 'jpn'
   _wakeLock = new ScreenWakeLock()
@@ -195,49 +196,64 @@ export default class MediaEngine extends TypedEventTarget<EngineEventMap> {
   }
 
   async load (src: string) {
+    // A new load disposes the input of the load before it. Wait on that input
+    // then fails with InputDisposedError, so a superseded load stops here and
+    // keeps the error to itself.
+    const seq = ++this._loadSeq
+    const superseded = () => this._destroyed || seq !== this._loadSeq
+
+    this._epoch++
     this._reset()
     this._setState('loading')
     this._setReadyState(0)
 
-    await registerCodecs()
-    if (this._destroyed) return
+    try {
+      await registerCodecs()
+      if (superseded()) return
 
-    const input = this._input = new Input({ source: new UrlSource(src), formats: ALL_FORMATS })
-    const [videoTracks, audioTracks] = await Promise.all([input.getVideoTracks(), input.getAudioTracks()])
-    if (this._destroyed) return
+      const input = this._input = new Input({ source: new UrlSource(src), formats: ALL_FORMATS })
+      const [videoTracks, audioTracks] = await Promise.all([input.getVideoTracks(), input.getAudioTracks()])
+      if (superseded()) return
 
-    if (!videoTracks.length) throw new Error('This file has no video track.')
+      if (!videoTracks.length) throw new Error('This file has no video track.')
 
-    this._videoTracks = videoTracks
-    this._audioTracks = audioTracks
-    this._videoTrack = videoTracks[0]!
-    if (!await this._videoTrack.canDecode()) throw new Error('This video track cannot be decoded in this environment.')
-    this._audioTrack = await this._pickAudio()
+      this._videoTracks = videoTracks
+      this._audioTracks = audioTracks
+      this._videoTrack = videoTracks[0]!
+      if (!await this._videoTrack.canDecode()) throw new Error('This video track cannot be decoded in this environment.')
+      if (superseded()) return
+      this._audioTrack = await this._pickAudio()
+      if (superseded()) return
 
-    this.video.setSink(new VideoSampleSink(this._videoTrack))
+      this.video.setSink(new VideoSampleSink(this._videoTrack))
 
-    this.videoWidth = this._videoTrack.displayWidth
-    this.videoHeight = this._videoTrack.displayHeight
-    this.canvas.width = this.videoWidth
-    this.canvas.height = this.videoHeight
+      this.videoWidth = this._videoTrack.displayWidth
+      this.videoHeight = this._videoTrack.displayHeight
+      this.canvas.width = this.videoWidth
+      this.canvas.height = this.videoHeight
 
-    const metadataDuration = await input.getDurationFromMetadata(this._trackList, { skipLiveWait: true })
-    const computed = metadataDuration ?? await input.computeDuration(this._trackList, { skipLiveWait: true })
-    if (this._destroyed) return
-    this.duration = computed ?? 0
-    this.audio.setDuration(this.duration)
-    this._emit('durationchange', { duration: this.duration })
+      const metadataDuration = await input.getDurationFromMetadata(this._trackList, { skipLiveWait: true })
+      if (superseded()) return
+      const computed = metadataDuration ?? await input.computeDuration(this._trackList, { skipLiveWait: true })
+      if (superseded()) return
+      this.duration = computed ?? 0
+      this.audio.setDuration(this.duration)
+      this._emit('durationchange', { duration: this.duration })
 
-    await this.audio.setup(this._audioTrack)
-    if (this._destroyed) return
+      await this.audio.setup(this._audioTrack)
+      if (superseded()) return
 
-    this._publishTracks()
-    await this.seekTo(0)
-    if (this._destroyed) return
+      this._publishTracks()
+      await this.seekTo(0)
+      if (superseded()) return
 
-    this._setState('ready')
-    this._emit('loadedmetadata', { duration: this.duration, videoWidth: this.videoWidth, videoHeight: this.videoHeight })
-    this._emitSimple('loadeddata')
+      this._setState('ready')
+      this._emit('loadedmetadata', { duration: this.duration, videoWidth: this.videoWidth, videoHeight: this.videoHeight })
+      this._emitSimple('loadeddata')
+    } catch (error) {
+      if (superseded()) return
+      throw error
+    }
   }
 
   async _pickAudio () {

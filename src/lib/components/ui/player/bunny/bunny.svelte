@@ -73,6 +73,7 @@
   let subtitleCanvas: HTMLCanvasElement
   let engine: MediaEngine
   let loadedSrc = ''
+  let loading = false
   let lastObservedTime = 0
   let lastObservedPaused = true
   let selectedAudioId = ''
@@ -108,12 +109,16 @@
 
   async function load (source = src) {
     if (!engine || !source) return
+    if (loading && source === loadedSrc) return
     loadedSrc = source
+    loading = true
     try {
       await engine.load(source)
       if (autoplay || !paused) await engine.play()
     } catch (error) {
       dispatch('fallback', error as Error)
+    } finally {
+      loading = false
     }
   }
 

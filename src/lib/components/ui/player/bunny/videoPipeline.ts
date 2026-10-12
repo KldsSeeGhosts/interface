@@ -94,7 +94,15 @@ export default class VideoPipeline extends TypedEventTarget<VideoPipelineEventMa
 
     const iterator = this._sink.samples(time)
     this._iter = iterator
-    const first = await iterator.next()
+    let first: IteratorResult<VideoSample>
+    try {
+      first = await iterator.next()
+    } catch (error) {
+      // A disposed input rejects a decode that is still pending. Stay quiet
+      // when this seek is already stale, otherwise report the failure.
+      if (gen === this._gen && !this._destroyed) this._emit('error', { error: error as Error })
+      return
+    }
     if (gen !== this._gen || this._destroyed) {
       if (!first.done) first.value.close()
       return
