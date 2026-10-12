@@ -433,8 +433,13 @@
   try {
     // about://flags/#auto-picture-in-picture-for-video-playback
     native.setActionHandler('enterpictureinpicture', () => {
-      goto('/#/app/player')
-      pip.pip(true)
+      if (SUPPORTS.isMobile) {
+        goto('/#/app/player')
+        // @ts-expect-error mobile plugin, I hate this.
+        return globalThis.PictureInPicture.enter(videoWidth, videoHeight, _ => _, console.error)
+      } else {
+        pip.pip(true)
+      }
     })
   } catch (e) {}
 
