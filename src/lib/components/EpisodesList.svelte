@@ -105,6 +105,15 @@
                 </div>
               </div>
             {/if}
+            {#if $settings.backgroundDownloads}
+              <Button
+                variant='ghost'
+                size='icon-sm'
+                class={cn('absolute top-2 z-10 shrink-0 text-muted-foreground select:text-accent-foreground right-[0.7rem]')}
+                on:click={e => { e.stopPropagation(); download(episode) }}>
+                <Download class='size-3.5' />
+              </Button>
+            {/if}
             <div class='flex-grow py-3 px-4 flex flex-col'>
               <div class='font-bold mb-2 line-clamp-1 shrink-0 text-[12.8px] pr-8'>
                 {episode}. {title?.en ?? 'Episode ' + episode}
@@ -127,33 +136,22 @@
                   {notes(summary ?? '')}
                 {/if}
               </div>
-              <div class='flex w-full items-end justify-between mt-auto gap-2'>
+              <div class='flex w-full justify-between mt-auto'>
                 {#if airingAt ?? airdate}
                   <div class='text-[9.6px] pt-2'>
                     {since(new Date(airingAt ?? airdate ?? 0))}
                   </div>
                 {/if}
-                <div class='ml-auto inline-flex items-center gap-1 pt-1'>
-                  <div class='-space-x-1 inline-flex pr-0.5'>
-                    {#each followerEntries.filter(e => e?.progress === episode) as followerEntry, i (followerEntry?.user?.id ?? i)}
-                      {#if followerEntry?.user}
-                        <Profile user={followerEntry.user} class='ring-2 ring-muted size-4 bg-background' />
-                      {/if}
-                    {/each}
-                  </div>
-                  {#if $settings.backgroundDownloads}
-                    <Button
-                      variant='ghost'
-                      size='icon-sm'
-                      class='shrink-0 text-muted-foreground select:text-accent-foreground'
-                      on:click={e => { e.stopPropagation(); download(episode) }}>
-                      <Download class='size-3.5' />
-                    </Button>
-                  {/if}
+                <div class='-space-x-1 ml-auto inline-flex pt-1 pr-0.5'>
+                  {#each followerEntries.filter(e => e?.progress === episode) as followerEntry, i (followerEntry?.user?.id ?? i)}
+                    {#if followerEntry?.user}
+                      <Profile user={followerEntry.user} class='ring-2 ring-muted size-4 bg-background' />
+                    {/if}
+                  {/each}
                 </div>
               </div>
               {#if filler}
-                <div class='rounded-bl bg-yellow-400 py-1 px-2 text-primary-foreground absolute top-0 right-0 text-[9.6px] font-bold'>Filler</div>
+                <div class='rounded-tl bg-yellow-400 py-1 px-2 text-primary-foreground absolute bottom-0 right-0 text-[9.6px] font-bold'>Filler</div>
               {/if}
             </div>
           </div>
