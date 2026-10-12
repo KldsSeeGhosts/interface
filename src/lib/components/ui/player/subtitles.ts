@@ -125,7 +125,7 @@ export default class Subtitles {
 
     extensions.subtitlesQuery(mediaInfo.media, mediaInfo.episode).then(async results => {
       for (const { url, language } of results) {
-        fetchAndLoad({ url, name: language })
+        await fetchAndLoad({ url, name: language })
       }
     })
 
