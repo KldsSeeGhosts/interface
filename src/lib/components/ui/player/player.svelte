@@ -284,12 +284,12 @@
   let wasPaused = false
   function startSeek () {
     wasPaused = paused
-    if (!paused) video.pause()
+    if (!paused && !useMediaBunnyPlayback) video.pause()
   }
 
   function finishSeek () {
     seekTo(seekPercent * safeduration / 100)
-    if (!wasPaused) video.play()
+    if (!wasPaused && !useMediaBunnyPlayback) video.play()
   }
 
   const chaptersHandler = new Chapters(mediaInfo)

@@ -84,9 +84,11 @@ export default class MediaEngine extends TypedEventTarget<EngineEventMap> {
   _state: PlayerState = 'idle'
   _epoch = 0
   _loadSeq = 0
+  _seeking = 0
   _destroyed = false
   _preferredAudioLanguage = 'jpn'
   _wakeLock = new ScreenWakeLock()
+  _firstTimestamp = 0
 
   _input?: Input
   _videoTrack?: InputVideoTrack
@@ -98,6 +100,7 @@ export default class MediaEngine extends TypedEventTarget<EngineEventMap> {
     super()
     this.canvas = canvas
     this.video = new VideoPipeline(canvas, () => this.audio.time)
+    this.audio.canResume = () => this._seeking === 0
     this._bindPipelines()
   }
 
@@ -163,7 +166,7 @@ export default class MediaEngine extends TypedEventTarget<EngineEventMap> {
     if (this._videoTrack && this._state !== 'idle' && this._state !== 'loading') {
       if (!this.video.hasFrame) {
         next = 1
-      } else if (this._audioTrack) {
+      } else if (this._audioTrack && !this.audio.exhausted) {
         const ahead = this.audio.bufferedFrames / this.audio.inputRate
         next = ahead > READY_AHEAD_SECONDS ? 3 : 2
       } else {
@@ -237,6 +240,8 @@ export default class MediaEngine extends TypedEventTarget<EngineEventMap> {
       const computed = metadataDuration ?? await input.computeDuration(this._trackList, { skipLiveWait: true })
       if (superseded()) return
       this.duration = computed ?? 0
+      this._firstTimestamp = Math.max(0, await input.getFirstTimestamp(this._trackList))
+      if (superseded()) return
       this.audio.setDuration(this.duration)
       this._emit('durationchange', { duration: this.duration })
 
@@ -244,7 +249,7 @@ export default class MediaEngine extends TypedEventTarget<EngineEventMap> {
       if (superseded()) return
 
       this._publishTracks()
-      await this.seekTo(0)
+      await this.seekTo(this._firstTimestamp)
       if (superseded()) return
 
       this._setState('ready')
@@ -273,6 +278,7 @@ export default class MediaEngine extends TypedEventTarget<EngineEventMap> {
 
   async play () {
     if (this._destroyed) return
+    if (this.playing) return
     if (this._state === 'ended') {
       await this.seekTo(0)
       if (this._destroyed) return
@@ -290,7 +296,9 @@ export default class MediaEngine extends TypedEventTarget<EngineEventMap> {
 
     this.video.start()
     this._setState('playing')
-    await this.audio.play()
+    // A seek in flight resumes output after it presents its video frame.
+    if (this._seeking) await this.audio.prime()
+    else await this.audio.play()
     if (this._destroyed) return
     this._wakeLock.request()
   }
@@ -308,23 +316,28 @@ export default class MediaEngine extends TypedEventTarget<EngineEventMap> {
   async seekTo (time: number) {
     if (this._destroyed) return
     const epoch = ++this._epoch
+    this._seeking++
     this.ended = false
 
-    const target = clamp(time, 0, this.duration || time)
+    const target = clamp(time, this._firstTimestamp, this.duration || time)
 
-    await this.audio.seek(target)
-    if (epoch !== this._epoch || this._destroyed) return
+    try {
+      await this.audio.seek(target)
+      if (epoch !== this._epoch || this._destroyed) return
 
-    this._emit('timeupdate', { time: target })
-    this._emit('buffered', { start: 0, end: target })
+      this._emit('timeupdate', { time: target })
+      this._emit('buffered', { start: 0, end: target })
 
-    await this.video.seek(target)
-    if (epoch !== this._epoch || this._destroyed) return
+      await this.video.seek(target)
+      if (epoch !== this._epoch || this._destroyed) return
 
-    this._updateReadyState()
-    this._setState(this.paused ? 'paused' : 'playing')
-    // Resume the clock only after the frame at the new position is presented.
-    if (!this.paused) this.audio.resumeOutput()
+      this._updateReadyState()
+      this._setState(this.paused ? 'paused' : 'playing')
+      // Resume the clock only after the frame at the new position is presented.
+      if (!this.paused) this.audio.resumeOutput()
+    } finally {
+      this._seeking--
+    }
   }
 
   _checkEnded (clock: number) {
@@ -397,6 +410,7 @@ export default class MediaEngine extends TypedEventTarget<EngineEventMap> {
     this._videoTracks = []
     this._audioTracks = []
     this.duration = 0
+    this._firstTimestamp = 0
     this.audio.setDuration(0)
     this._setReadyState(0)
     this.paused = true

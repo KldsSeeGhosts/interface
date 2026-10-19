@@ -379,35 +379,37 @@ class PcmScheduler extends AudioWorkletProcessor {
   }
 
   process (_inputs: Float32Array[][], outputs: Float32Array[][]): boolean {
-    const out = outputs[0]
-    if (!out?.length || !out[0]) return true
+    try {
+      const out = outputs[0]
+      if (!out?.length || !out[0]) return true
 
-    const blockSize = out[0].length
-    const active = this._shouldPlay || this._gain > 1e-4
-    let produced = 0
+      const blockSize = out[0].length
+      const active = this._shouldPlay || this._gain > 1e-4
+      let produced = 0
 
-    if (active) {
-      produced = this._mode === 'direct' ? this._fillDirect(out, blockSize) : this._fillWsola(out, blockSize)
-    } else {
-      for (let c = 0; c < out.length; c++) out[c]!.fill(0)
-    }
+      if (active) {
+        produced = this._mode === 'direct' ? this._fillDirect(out, blockSize) : this._fillWsola(out, blockSize)
+      } else {
+        for (let c = 0; c < out.length; c++) out[c]!.fill(0)
+      }
 
-    let gain = this._gain
-    const target = this._target
-    const ramp = this._ramp
-    for (let i = 0; i < blockSize; i++) {
-      if (gain < target) gain = Math.min(target, gain + ramp)
-      else if (gain > target) gain = Math.max(target, gain - ramp)
-      for (let c = 0; c < out.length; c++) out[c]![i] = out[c]![i]! * gain
-    }
-    this._gain = gain
+      let gain = this._gain
+      const target = this._target
+      const ramp = this._ramp
+      for (let i = 0; i < blockSize; i++) {
+        if (gain < target) gain = Math.min(target, gain + ramp)
+        else if (gain > target) gain = Math.max(target, gain - ramp)
+        for (let c = 0; c < out.length; c++) out[c]![i] = out[c]![i]! * gain
+      }
+      this._gain = gain
 
-    if (active) {
-      this._emitted += produced
-      if (produced < blockSize) this._underruns++
-    }
+      if (active) {
+        this._emitted += produced
+        if (produced < blockSize) this._underruns++
+      }
 
-    this._report(produced)
+      this._report(produced)
+    } catch {}
     return true
   }
 }

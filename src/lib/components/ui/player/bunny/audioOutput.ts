@@ -16,6 +16,11 @@ import { clamp, sleep } from '$lib/utils'
 const AUDIO_BUFFER_SECONDS = 3
 const AUDIO_LOW_WATER_SECONDS = 0.5
 const SEEK_FADE_MS = 12
+// A decoder can reject a decode while it tears down after a seek. Retry the
+// pump before audio is dropped, and never fail the engine for an audio error.
+const PUMP_RETRY_LIMIT = 5
+const PUMP_RETRY_DELAY_MS = 100
+const PUMP_RETRY_WINDOW_MS = 5000
 
 interface WorkletMessage {
   type?: string
@@ -42,6 +47,8 @@ export default class AudioOutput extends TypedEventTarget<AudioOutputEventMap> {
   volume = 1
   muted = false
   playing = false
+  // The engine closes this gate while a seek has not presented its video frame.
+  canResume?: () => boolean
   inputRate = 48000
   bufferedFrames = 0
   mediaEnd = 0
@@ -59,11 +66,14 @@ export default class AudioOutput extends TypedEventTarget<AudioOutputEventMap> {
   _seekSeq = 0
   _streamId = 0
   _gen = 0
-  _pushedFrames = 0
   _highWaterFrames = AUDIO_BUFFER_SECONDS * 48000
   _lowWaterFrames = AUDIO_LOW_WATER_SECONDS * 48000
   _waiters: Array<() => void> = []
   _iter?: AsyncIterator<WrappedAudioBuffer>
+
+  _pumpRetries = 0
+  _lastPumpErrorAt = 0
+  _pumpRetryTimer = 0
 
   _clockMedia = 0
   _clockPerf = 0
@@ -93,6 +103,14 @@ export default class AudioOutput extends TypedEventTarget<AudioOutputEventMap> {
 
   _effectiveVolume () {
     return this.muted ? 0 : clamp(this.volume, 0, 1)
+  }
+
+  // The buffer depth is measured in media frames. At a high rate the worklet
+  // consumes them faster, so the depth must grow to keep the same play time.
+  _updateWatermarks () {
+    const scale = Math.max(this.rate, 0.5)
+    this._highWaterFrames = AUDIO_BUFFER_SECONDS * scale * this.inputRate
+    this._lowWaterFrames = AUDIO_LOW_WATER_SECONDS * scale * this.inputRate
   }
 
   // Move the clock and anchor to a media time. A fresh anchor stops the
@@ -126,13 +144,13 @@ export default class AudioOutput extends TypedEventTarget<AudioOutputEventMap> {
   }
 
   async setup (track?: InputAudioTrack) {
+    this._cancelPumpRetry()
     this._teardownAudio()
     this._track = track
     const sampleRate = track ? await track.getSampleRate() : 48000
     const channels = track ? await track.getNumberOfChannels() : 2
     this.inputRate = sampleRate
-    this._highWaterFrames = AUDIO_BUFFER_SECONDS * sampleRate
-    this._lowWaterFrames = AUDIO_LOW_WATER_SECONDS * sampleRate
+    this._updateWatermarks()
 
     const ctx = this._audioCtx = new AudioContext({ sampleRate })
     const gain = this._gainNode = ctx.createGain()
@@ -269,20 +287,63 @@ export default class AudioOutput extends TypedEventTarget<AudioOutputEventMap> {
         }
       } catch (error) {
         if (gen !== this._gen || streamId !== this._streamId) return
-        // Audio is optional. Keep the video running with the fallback clock.
-        this.exhausted = true
-        this.drained = true
-        this._anchorMedia = this._clockMedia
-        this._anchorPerf = performance.now()
-        this._workletNode?.port.postMessage({ type: 'pause' })
-        this._wakeWaiters()
-        this._emit('error', { error: error as Error })
+        this._handlePumpError(error as Error, gen, streamId)
       } finally {
         if (this._iter === iterator) this._iter = undefined
       }
     }
 
     run()
+  }
+
+  // A rejected decode is usually caused by decoder churn after a seek. Retry
+  // from the current time. If every retry fails, keep the video running on
+  // the fallback clock and drop audio. Do not fail the engine.
+  _handlePumpError (error: Error, gen: number, streamId: number) {
+    if (gen !== this._gen || streamId !== this._streamId || this._destroyed) return
+
+    const now = performance.now()
+    if (now - this._lastPumpErrorAt > PUMP_RETRY_WINDOW_MS) this._pumpRetries = 0
+    this._lastPumpErrorAt = now
+
+    if (this._pumpRetries >= PUMP_RETRY_LIMIT) {
+      const playhead = this.time
+      console.error('Audio decode failed, continuing without audio.', error)
+      this.exhausted = true
+      this.drained = true
+      this._anchorMedia = playhead
+      this._anchorPerf = performance.now()
+      this._workletNode?.port.postMessage({ type: 'pause' })
+      this._wakeWaiters()
+      return
+    }
+
+    const delay = PUMP_RETRY_DELAY_MS * 2 ** this._pumpRetries
+    this._pumpRetries++
+    console.warn('Audio decode failed, retrying from the current time.', error)
+    this._wakeWaiters()
+
+    this._cancelPumpRetry()
+    this._pumpRetryTimer = setTimeout(() => {
+      this._pumpRetryTimer = 0
+      // A seek started after the failure. Its own pump replaces this retry.
+      if (this._destroyed || this._streamId !== streamId) return
+      this._retrySeek(this.time).catch(() => {})
+    }, delay)
+  }
+
+  // The retry seek stops the worklet. Resume it, or the clock stays frozen
+  // and the video pipeline stops with it. Wait for an active seek to present
+  // its video frame before output starts.
+  async _retrySeek (time: number) {
+    const resumed = await this._seek(time)
+    if (resumed && this.playing && (this.canResume?.() ?? true)) await this.resumeOutput()
+  }
+
+  _cancelPumpRetry () {
+    if (!this._pumpRetryTimer) return
+    clearTimeout(this._pumpRetryTimer)
+    this._pumpRetryTimer = 0
   }
 
   _push (buffer: AudioBuffer, streamId: number) {
@@ -294,7 +355,6 @@ export default class AudioOutput extends TypedEventTarget<AudioOutputEventMap> {
       buffer.copyFromChannel(data, c)
       channelData.push(data)
     }
-    this._pushedFrames += frames
     try {
       this._workletNode?.port.postMessage({ type: 'push', channelData, streamId }, channelData.map(data => data.buffer))
     } catch {
@@ -302,12 +362,18 @@ export default class AudioOutput extends TypedEventTarget<AudioOutputEventMap> {
     }
   }
 
-  async play () {
+  // Resume the context under a user gesture without starting output. A seek
+  // in flight starts output when the video frame is ready.
+  async prime () {
     if (this._destroyed) return
     this.playing = true
     try {
       await this._audioCtx?.resume()
     } catch {}
+  }
+
+  async play () {
+    await this.prime()
     if (this._destroyed) return
     this.resumeOutput()
   }
@@ -319,10 +385,7 @@ export default class AudioOutput extends TypedEventTarget<AudioOutputEventMap> {
     const streamId = this._streamId
     if (this._track) {
       while (
-        (
-          (this.bufferedFrames < this._lowWaterFrames && !this.drained) ||
-          (this.drained && this.bufferedFrames < this._pushedFrames)
-        ) &&
+        this.bufferedFrames < this._lowWaterFrames && !this.drained &&
         gen === this._gen && streamId === this._streamId &&
         !this._destroyed && this.playing
       ) {
@@ -343,7 +406,13 @@ export default class AudioOutput extends TypedEventTarget<AudioOutputEventMap> {
   }
 
   async seek (time: number) {
-    if (this._destroyed) return
+    this._pumpRetries = 0
+    this._cancelPumpRetry()
+    await this._seek(time)
+  }
+
+  async _seek (time: number) {
+    if (this._destroyed) return false
     const seq = ++this._seekSeq
     this._streamId++
     this.drained = false
@@ -353,19 +422,19 @@ export default class AudioOutput extends TypedEventTarget<AudioOutputEventMap> {
     if (this.playing && this._workletNode) {
       this._workletNode.port.postMessage({ type: 'gain', value: 0 })
       await sleep(SEEK_FADE_MS)
-      if (seq !== this._seekSeq || this._destroyed) return
+      if (seq !== this._seekSeq || this._destroyed) return false
     }
 
     this._workletNode?.port.postMessage({ type: 'pause' })
     this._workletNode?.port.postMessage({ type: 'flush', anchorMedia: time, streamId: this._streamId, rate: this.rate })
     this.bufferedFrames = 0
-    this._pushedFrames = 0
     this._gen++
     this._wakeWaiters()
     this._closeIterator()
     this._setClock(time)
 
     this._startPump(time)
+    return true
   }
 
   setRate (rate: number) {
@@ -377,6 +446,7 @@ export default class AudioOutput extends TypedEventTarget<AudioOutputEventMap> {
     this._anchorMedia = now
     this._anchorPerf = performance.now()
     this._setClock(now, this._clockActive)
+    this._updateWatermarks()
   }
 
   setVolume (volume: number) {
@@ -399,6 +469,9 @@ export default class AudioOutput extends TypedEventTarget<AudioOutputEventMap> {
   reset () {
     this._gen++
     this._seekSeq++
+    this._cancelPumpRetry()
+    this._pumpRetries = 0
+    this._lastPumpErrorAt = 0
     this._wakeWaiters()
     this._closeIterator()
     this._teardownAudio()
@@ -407,7 +480,6 @@ export default class AudioOutput extends TypedEventTarget<AudioOutputEventMap> {
     this.drained = false
     this.exhausted = false
     this.bufferedFrames = 0
-    this._pushedFrames = 0
     this.mediaEnd = 0
     this._setClock(0)
   }
