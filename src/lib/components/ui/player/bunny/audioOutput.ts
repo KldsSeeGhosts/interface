@@ -20,6 +20,7 @@ const SEEK_FADE_MS = 12
 interface WorkletMessage {
   type?: string
   mediaTime?: number
+  contextTime?: number
   bufferedFrames?: number
   active?: boolean
   underruns?: number
@@ -77,7 +78,8 @@ export default class AudioOutput extends TypedEventTarget<AudioOutputEventMap> {
   get time () {
     if (!this._track || this.exhausted) return this._noAudioTime()
     if (!this.playing || !this._clockActive) return this._clockMedia
-    return clamp(this._clockMedia + ((performance.now() - this._clockPerf) / 1000) * this.rate, 0, this._duration || Infinity)
+    const elapsed = Math.max(0, performance.now() - this._clockPerf)
+    return clamp(this._clockMedia + (elapsed / 1000) * this.rate, 0, this._duration || Infinity)
   }
 
   _noAudioTime () {
@@ -85,10 +87,8 @@ export default class AudioOutput extends TypedEventTarget<AudioOutputEventMap> {
     return clamp(this._anchorMedia + ((performance.now() - this._anchorPerf) / 1000) * this.rate, 0, this._duration || Infinity)
   }
 
-  _outputLatency () {
-    const ctx = this._audioCtx
-    if (!ctx) return 0
-    return ctx.outputLatency || ctx.baseLatency || 0
+  _baseLatency () {
+    return this._audioCtx?.baseLatency ?? 0
   }
 
   _effectiveVolume () {
@@ -134,7 +134,7 @@ export default class AudioOutput extends TypedEventTarget<AudioOutputEventMap> {
     this._highWaterFrames = AUDIO_BUFFER_SECONDS * sampleRate
     this._lowWaterFrames = AUDIO_LOW_WATER_SECONDS * sampleRate
 
-    const ctx = this._audioCtx = new AudioContext({ sampleRate, latencyHint: 'playback' })
+    const ctx = this._audioCtx = new AudioContext({ sampleRate })
     const gain = this._gainNode = ctx.createGain()
     gain.gain.value = this._effectiveVolume()
     gain.connect(ctx.destination)
@@ -175,9 +175,17 @@ export default class AudioOutput extends TypedEventTarget<AudioOutputEventMap> {
   _onWorkletMessage (data: WorkletMessage) {
     if (data.type !== 'progress') return
     this.bufferedFrames = data.bufferedFrames ?? 0
-    this._clockMedia = clamp((data.mediaTime ?? 0) - this._outputLatency(), 0, this._duration || Infinity)
-    this._clockPerf = performance.now()
-    this._clockActive = data.active ?? false
+
+    const active = data.active ?? false
+    const ctx = this._audioCtx
+    let mediaTime = (data.mediaTime ?? 0) - this._baseLatency()
+    // Anchor to the worklet send time, not the message arrival time. A busy
+    // main thread can delay a message, and arrival time would then move the
+    // clock backwards.
+    if (active && ctx && typeof data.contextTime === 'number') {
+      mediaTime += Math.max(0, ctx.currentTime - data.contextTime) * this.rate
+    }
+    this._syncClock(mediaTime, active)
 
     if (this.drained && this.bufferedFrames <= 0 && this._clockActive && !this.exhausted) {
       this.exhausted = true
@@ -192,6 +200,28 @@ export default class AudioOutput extends TypedEventTarget<AudioOutputEventMap> {
       active: this._clockActive
     })
     this._wakeWaiters()
+  }
+
+  // Snap the clock on a seek or a pause. During playback, hold the clock while
+  // the worklet catches up instead of moving it backwards. A backward jump
+  // makes the video wait for frames that it has already drawn.
+  _syncClock (mediaTime: number, active: boolean) {
+    const next = clamp(mediaTime, 0, this._duration || Infinity)
+    if (!this.playing || !active || !this._clockActive) {
+      this._setClock(next, active)
+      return
+    }
+
+    const current = this.time
+    if (next >= current) {
+      this._setClock(next, active)
+      return
+    }
+
+    const hold = Math.max(0, current - next) / this.rate
+    this._clockMedia = current
+    this._clockPerf = performance.now() + hold * 1000
+    this._clockActive = active
   }
 
   _wakeWaiters () {
@@ -346,7 +376,7 @@ export default class AudioOutput extends TypedEventTarget<AudioOutputEventMap> {
     this._workletNode?.port.postMessage({ type: 'rate', rate: next })
     this._anchorMedia = now
     this._anchorPerf = performance.now()
-    this._clockPerf = performance.now()
+    this._setClock(now, this._clockActive)
   }
 
   setVolume (volume: number) {

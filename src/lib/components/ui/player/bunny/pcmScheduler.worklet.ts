@@ -364,13 +364,14 @@ class PcmScheduler extends AudioWorkletProcessor {
     return take
   }
 
-  _report () {
+  _report (produced: number) {
     if (++this._reportCounter < REPORT_EVERY) return
     this._reportCounter = 0
     const cursor = this._mode === 'direct' ? this._readAbs : this._ana
     this.port.postMessage({
       type: 'progress',
       mediaTime: this._currentMedia(),
+      contextTime: currentTime + produced / sampleRate,
       bufferedFrames: Math.max(0, this._received - cursor),
       active: this._shouldPlay || this._gain > 1e-4,
       underruns: this._underruns
@@ -406,7 +407,7 @@ class PcmScheduler extends AudioWorkletProcessor {
       if (produced < blockSize) this._underruns++
     }
 
-    this._report()
+    this._report(produced)
     return true
   }
 }

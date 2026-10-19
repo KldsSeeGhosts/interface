@@ -2,8 +2,9 @@
 //
 // The pipeline reads frames from a VideoSampleSink and presents them against a
 // clock supplied by the caller. Frames that are due are drawn to the canvas.
-// Frames that are late are dropped. All decode work is guarded by a generation
-// counter, so a stale iterator stops itself after a seek.
+// Frames that are late are dropped. The iterator runs a few frames ahead, so a
+// slow decode does not stall presentation. All decode work is guarded by a
+// generation counter, so a stale iterator stops itself after a seek.
 
 import { closeIterator } from './helpers'
 
@@ -17,6 +18,14 @@ const VIDEO_DROP_SECONDS = 0.08
 // After this many consecutive drops, present one anyway to keep the picture
 // moving instead of freezing on the last frame.
 const MAX_CONSECUTIVE_DROPS = 5
+// Keep a small queue of decoded frames, so presentation can catch up after a
+// late decode or a seek.
+const PREFETCH_FRAMES = 3
+// A decoder can reject a decode while it tears down after a seek. A new
+// iterator usually succeeds, so retry before the error reaches the engine.
+const DECODE_RETRY_LIMIT = 5
+const DECODE_RETRY_DELAY_MS = 100
+const DECODE_RETRY_WINDOW_MS = 5000
 
 export interface VideoPipelineEventMap {
   tick: CustomEvent<{ time: number }>
@@ -35,13 +44,16 @@ export default class VideoPipeline extends TypedEventTarget<VideoPipelineEventMa
   _getClock: () => number
   _sink?: VideoSampleSink
   _iter?: AsyncIterator<VideoSample>
-  _nextFrame?: VideoSample
+  _frames: VideoSample[] = []
   hasFrame = false
-  _fetching = false
+  _fetchGen = -1
   _gen = 0
   _playing = false
   _rafId = 0
   _dropsSincePresent = 0
+  _retries = 0
+  _lastErrorAt = 0
+  _retryTimer = 0
 
   _frameCallbacks = new Map<number, VideoFrameRequestCallback>()
   _frameHandle = 0
@@ -64,7 +76,7 @@ export default class VideoPipeline extends TypedEventTarget<VideoPipelineEventMa
   }
 
   get hasNextFrame () {
-    return !!this._nextFrame
+    return this._frames.length > 0
   }
 
   setSink (sink?: VideoSampleSink) {
@@ -72,12 +84,14 @@ export default class VideoPipeline extends TypedEventTarget<VideoPipelineEventMa
   }
 
   async seek (time: number) {
+    this._retries = 0
+    this._cancelRetry()
+    await this._seek(time)
+  }
+
+  async _seek (time: number) {
     const gen = ++this._gen
-    this._fetching = false
-    if (this._nextFrame) {
-      this._nextFrame.close()
-      this._nextFrame = undefined
-    }
+    this._closeFrames()
     try {
       await closeIterator(this._iter)
     } catch {}
@@ -99,8 +113,8 @@ export default class VideoPipeline extends TypedEventTarget<VideoPipelineEventMa
       first = await iterator.next()
     } catch (error) {
       // A disposed input rejects a decode that is still pending. Stay quiet
-      // when this seek is already stale, otherwise report the failure.
-      if (gen === this._gen && !this._destroyed) this._emit('error', { error: error as Error })
+      // when this seek is already stale, otherwise recover the pipeline.
+      if (gen === this._gen && !this._destroyed) this._handleDecodeError(error as Error, gen)
       return
     }
     if (gen !== this._gen || this._destroyed) {
@@ -113,7 +127,7 @@ export default class VideoPipeline extends TypedEventTarget<VideoPipelineEventMa
     }
     this._note(first.value)
     this._present(first.value, time)
-    this._ensureFrame(gen)
+    this._ensureFrames(gen)
   }
 
   _note (sample: VideoSample) {
@@ -121,29 +135,81 @@ export default class VideoPipeline extends TypedEventTarget<VideoPipelineEventMa
     if (Number.isFinite(end)) this.mediaEnd = Math.max(this.mediaEnd, end)
   }
 
-  async _ensureFrame (gen: number) {
-    if (this._fetching || !this._iter) return
-    this._fetching = true
+  async _ensureFrames (gen: number) {
+    if (this._fetchGen === gen) return
     const iterator = this._iter
+    if (!iterator || this.drained || this._frames.length >= PREFETCH_FRAMES) return
 
+    this._fetchGen = gen
     try {
-      const result = await iterator.next()
-      if (gen !== this._gen || this._destroyed) {
-        if (!result.done) result.value.close()
-        return
+      while (
+        gen === this._gen && !this._destroyed &&
+        this._frames.length < PREFETCH_FRAMES
+      ) {
+        const result = await iterator.next()
+        if (gen !== this._gen || this._destroyed) {
+          if (!result.done) result.value.close()
+          return
+        }
+        if (result.done) {
+          this.drained = true
+          return
+        }
+        this._note(result.value)
+        this._frames.push(result.value)
       }
-      if (result.done) {
-        this.drained = true
-        this._nextFrame = undefined
-        return
-      }
-      this._note(result.value)
-      this._nextFrame = result.value
     } catch (error) {
-      if (gen === this._gen) this._emit('error', { error: error as Error })
+      if (gen === this._gen) this._handleDecodeError(error as Error, gen)
     } finally {
-      this._fetching = false
+      if (this._fetchGen === gen) this._fetchGen = -1
     }
+  }
+
+  // A rejected decode is usually a teaser of too many decoder instances while
+  // a previous iterator tears down. Abandon the iterator and try again from
+  // the current clock. Only a run of failures reaches the engine.
+  _handleDecodeError (error: Error, gen: number) {
+    if (gen !== this._gen || this._destroyed) return
+
+    const now = performance.now()
+    if (now - this._lastErrorAt > DECODE_RETRY_WINDOW_MS) this._retries = 0
+    this._lastErrorAt = now
+
+    if (this._retries >= DECODE_RETRY_LIMIT) {
+      this._emit('error', { error })
+      return
+    }
+
+    const delay = DECODE_RETRY_DELAY_MS * 2 ** this._retries
+    this._retries++
+    console.warn('Video decode failed, retrying from the current time.', error)
+
+    // Invalidate the broken iterator before the retry starts.
+    this._gen++
+    const retryGen = this._gen
+    this.drained = false
+    this._closeFrames()
+    const iterator = this._iter
+    this._iter = undefined
+    closeIterator(iterator)
+
+    this._cancelRetry()
+    this._retryTimer = window.setTimeout(() => {
+      this._retryTimer = 0
+      if (this._destroyed || retryGen !== this._gen) return
+      this._seek(this._getClock()).catch(() => {})
+    }, delay)
+  }
+
+  _cancelRetry () {
+    if (!this._retryTimer) return
+    clearTimeout(this._retryTimer)
+    this._retryTimer = 0
+  }
+
+  _closeFrames () {
+    for (const frame of this._frames) frame.close()
+    this._frames = []
   }
 
   _present (frame: VideoSample, clock: number) {
@@ -193,24 +259,18 @@ export default class VideoPipeline extends TypedEventTarget<VideoPipelineEventMa
     if (!this._playing) return
     const clock = this._getClock()
 
-    if (!this._nextFrame) {
-      this._ensureFrame(this._gen)
-    } else {
-      while (this._nextFrame && this._nextFrame.timestamp <= clock + VIDEO_TOLERANCE) {
-        const frame = this._nextFrame
-        this._nextFrame = undefined
-        const late = frame.timestamp < clock - VIDEO_DROP_SECONDS
-        if (late && this._iter && this._dropsSincePresent < MAX_CONSECUTIVE_DROPS) {
-          this._dropsSincePresent++
-          frame.close()
-        } else {
-          this._dropsSincePresent = 0
-          this._present(frame, clock)
-        }
-        this._ensureFrame(this._gen)
-        if (!this._nextFrame) break
+    while (this._frames.length && this._frames[0]!.timestamp <= clock + VIDEO_TOLERANCE) {
+      const frame = this._frames.shift()!
+      const late = frame.timestamp < clock - VIDEO_DROP_SECONDS
+      if (late && this._iter && this._dropsSincePresent < MAX_CONSECUTIVE_DROPS) {
+        this._dropsSincePresent++
+        frame.close()
+      } else {
+        this._dropsSincePresent = 0
+        this._present(frame, clock)
       }
     }
+    this._ensureFrames(this._gen)
 
     this._emit('tick', { time: clock })
   }
@@ -237,11 +297,11 @@ export default class VideoPipeline extends TypedEventTarget<VideoPipelineEventMa
   reset () {
     this._gen++
     this.stop()
-    this._fetching = false
-    if (this._nextFrame) {
-      this._nextFrame.close()
-      this._nextFrame = undefined
-    }
+    this._cancelRetry()
+    this._fetchGen = -1
+    this._retries = 0
+    this._lastErrorAt = 0
+    this._closeFrames()
     if (this._iter) {
       const iterator = this._iter
       this._iter = undefined
