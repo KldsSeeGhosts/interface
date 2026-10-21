@@ -152,7 +152,10 @@ export default new class URQLClient extends Client {
                   debug('status', status)
 
                   const lists = data.MediaListCollection.lists
-                  if (!lists.some(l => l?.status === status)) lists.push({ status, entries: [] })
+                  if (!lists.some(l => l?.status === status)) {
+                    // @ts-expect-error a new list needs a typename, or graphcache cannot write it and drops the entry
+                    lists.push({ status, entries: [], __typename: 'MediaListGroup' })
+                  }
 
                   for (const list of lists) {
                     if (!list) continue

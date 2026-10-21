@@ -147,7 +147,8 @@ class AnilistClient {
       synonyms
     }`
 
-    const res = await this.client.query<Record<string, {media: Media[]}>>(query, requestVariables)
+    // a title lookup does not need a network round trip when the result is already cached
+    const res = await this.client.query<Record<string, {media: Media[]}>>(query, requestVariables, { requestPolicy: 'cache-first' })
 
     debug('searchCompound: received response', res)
 
@@ -174,7 +175,7 @@ class AnilistClient {
 
     const ids = Object.values(searchResults)
     debug('searchCompound: found IDs', ids)
-    const search = await this.client.query(Search, { ids, perPage: 50 })
+    const search = await this.client.query(Search, { ids, perPage: 50 }, { requestPolicy: 'cache-first' })
     debug('searchCompound: search query result', search)
     if (!search.data?.Page?.media) return []
     return Object.entries(searchResults).map(([filename, id]) => [filename, search.data!.Page!.media!.find(media => media?.id === id)]) as Array<[string, Media | undefined]>
