@@ -405,6 +405,8 @@ export function asyncStore<Result, Variables = AnyVariables> (query: TypedDocume
       } else if (value.data) {
         store.set(value.data)
         resolve(store)
+      } else if (!value.stale) {
+        reject(new Error('No data was received'))
       }
     })
   })

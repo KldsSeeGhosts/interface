@@ -194,6 +194,10 @@ export default new class URQLClient extends Client {
               MediaList: (parent, { id }) => ({ __typename: 'MediaList', id }),
               Thread: (parent, { id }) => ({ __typename: 'Thread', id }),
               ThreadComment: (parent, { id }) => ({ __typename: 'ThreadComment', id })
+            },
+            Media: {
+              // isFavourite is non-null, so a partially cached Media makes the whole query read fail
+              isFavourite: (parent, _args, cache, info) => cache.resolve(info.parentKey, 'isFavourite') ?? false
             }
           },
           optimistic: {
