@@ -71,5 +71,6 @@ export default {
   nzbLogin: '',
   nzbPassword: '',
   nzbPort: 119,
-  nzbPoolSize: 4
+  nzbPoolSize: 4,
+  remoteAccess: 'off' as 'off' | 'local' | 'localAndRemote'
 }

@@ -43,6 +43,7 @@
   import { dragScroll } from '$lib/modules/navigate'
   import { settings, SUPPORTS } from '$lib/modules/settings'
 
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const hasForwarding = persisted('torrent-port-forwarding', false)
 
   if (!speedTest.isRunning) speedTest.play()

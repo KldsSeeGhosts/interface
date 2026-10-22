@@ -25,6 +25,12 @@
     internal: 'Internal Storage',
     sdcard: 'SD Card'
   } as const
+
+  const remoteAccessOptions = {
+    off: 'Off',
+    local: 'This Network',
+    localAndRemote: 'Any Network'
+  } as const
 </script>
 
 <div class='font-weight-bold text-xl font-bold'>Security Settings</div>
@@ -43,6 +49,11 @@
   {/if}
 {/if}
 
+<div class='font-weight-bold text-xl font-bold'>Remote Access</div>
+<SettingCard title='Remote Access' description='Lets other devices control this torrent client. This network works only on your LAN. Any network also works over the internet and could be insecure.'>
+  <SingleCombo bind:value={$settings.remoteAccess} items={remoteAccessOptions} class='w-48 shrink-0 border-input border' />
+</SettingCard>
+
 <div class='font-weight-bold text-xl font-bold'>Torrent Client Settings</div>
 
 <SettingCard let:id title='Torrent Download Location' description={`Path to the folder used to store torrents. By default this is the OS's TEMP/TMP cache folder, which might lose data when your OS tries to reclaim storage.${SUPPORTS.isAndroid ? '\n\nSD Card saves to the Cards Download folder. If SD Card is not available torrents will automatically be saved to the Phone\'s Downloads folder' : ''}`}>
@@ -51,7 +62,7 @@
     {#if !SUPPORTS.isAndroid && !SUPPORTS.isIOS}
       <Button class='rounded-l-none font-bold' on:click={() => selectDownloadFolder()} variant='secondary'>Select Folder</Button>
     {:else}
-      <SingleCombo bind:value={$settings.androidStorageType} items={androidDirectories} class='w-32 shrink-0 border-input border rounded-l-none ' onSelected={selectDownloadFolder} />
+      <SingleCombo bind:value={$settings.androidStorageType} items={androidDirectories} class='w-32 shrink-0 border-input border rounded-l-none' onSelected={selectDownloadFolder} />
     {/if}
   </div>
 </SettingCard>
