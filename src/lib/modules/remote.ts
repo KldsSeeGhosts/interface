@@ -87,7 +87,6 @@ export default async function connect (key: string, domain: string) {
 
   const torrentNative: Partial<Native> = {
     checkAvailableSpace: torrent.checkAvailableSpace,
-    checkIncomingConnections: torrent.checkIncomingConnections,
     updatePeerCounts: torrent.scrape,
     addTorrent: async (id, mediaID, episode, background) => {
       const files = await torrent.playTorrent(id, mediaID, episode, session, background)
